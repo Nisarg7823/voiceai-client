@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Voice Assistant</title>
+    <style>
+      :root {
+        --bg: #0b0b0f;
+        --fg: #f5f5f7;
+        --muted: #8a8a94;
+        --ctl: rgba(255, 255, 255, 0.1);
+        --ctl-hover: rgba(255, 255, 255, 0.18);
+        --danger: #ff453a;
+      }
+
+      * { box-sizing: border-box; }
+
+      html, body { height: 100%; }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font: 400 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI",
+          Roboto, Helvetica, Arial, sans-serif;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 48px;
+        padding: 24px 16px calc(24px + env(safe-area-inset-bottom));
+        overflow: hidden;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      /* Ambient wash behind the orb */
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        background: radial-gradient(
+          60% 50% at 50% 42%,
+          rgba(88, 120, 255, 0.16),
+          transparent 70%
+        );
+        pointer-events: none;
+      }
+
+      /* ---------- Orb ---------- */
+      .stage {
+        position: relative;
+        width: 280px;
+        height: 280px;
+        display: grid;
+        place-items: center;
+        /* --level: live audio amplitude, 0 → 1, written by JS */
+        --level: 0;
+      }
+
+      .glow {
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        border-radius: 50%;
+        background: radial-gradient(
+          circle at 50% 50%,
+          rgba(120, 150, 255, 0.55),
+          transparent 62%
+        );
+        filter: blur(34px);
+        transform: scale(calc(0.85 + var(--level) * 0.5));
+        transition: transform 90ms ease-out;
+      }
+
+      .orb {
+        position: relative;
+        width: 172px;
+        height: 172px;
+        border-radius: 50%;
+        overflow: hidden;
+        background: linear-gradient(160deg, #eef1ff 0%, #b9c6ff 45%, #7d8cf0 100%);
+        box-shadow:
+          inset 0 -18px 40px rgba(60, 70, 160, 0.5),
+          inset 0 14px 30px rgba(255, 255, 255, 0.75),
+          0 18px 60px rgba(90, 110, 240, 0.4);
+        transform: scale(calc(1 + var(--level) * 0.22));
+        transition: transform 90ms ease-out;
+      }
+
+      /* Two drifting blobs give the surface its slow, organic churn */
+      .orb::before,
+      .orb::after {
+        content: "";
+        position: absolute;
+        border-radius: 50%;
+        filter: blur(18px);
+        opacity: 0.85;
+      }
+
+      .orb::before {
+        inset: -30% 20% 40% -25%;
+        background: radial-gradient(circle, #ffffff, transparent 68%);
+        animation: drift-a 9s ease-in-out infinite;
+      }
+
+      .orb::after {
+        inset: 42% -22% -30% 28%;
+        background: radial-gradient(circle, #6f7ff0, transparent 66%);
+        animation: drift-b 11s ease-in-out infinite;
+      }
+
+      @keyframes drift-a {
+        0%, 100% { transform: translate(0, 0) scale(1); }
+        50%      { transform: translate(18%, 14%) scale(1.22); }
+      }
+
+      @keyframes drift-b {
+        0%, 100% { transform: translate(0, 0) scale(1.1); }
+        50%      { transform: translate(-16%, -18%) scale(0.88); }
+      }
+
+      /* Ring that ripples outward while the agent talks */
+      .ring {
+        position: absolute;
+        width: 172px;
+        height: 172px;
+        border-radius: 50%;
+        border: 1px solid rgba(160, 180, 255, 0.5);
+        opacity: 0;
+      }
+
+      .stage[data-state="speaking"] .ring {
+        animation: ripple 1.8s ease-out infinite;
+      }
+
+      .stage[data-state="speaking"] .ring:nth-of-type(2) {
+        animation-delay: 0.9s;
+      }
+
+      @keyframes ripple {
+        0%   { opacity: 0.55; transform: scale(1); }
+        100% { opacity: 0;    transform: scale(1.9); }
+      }
+
+      /* Idle: a slow breath so it never looks frozen */
+      .stage[data-state="idle"] .orb,
+      .stage[data-state="connecting"] .orb {
+        animation: breathe 4s ease-in-out infinite;
+      }
+
+      @keyframes breathe {
+        0%, 100% { transform: scale(1); }
+        50%      { transform: scale(1.05); }
+      }
+
+      .stage[data-state="connecting"] .glow {
+        animation: breathe 1.6s ease-in-out infinite;
+      }
+
+      .stage[data-state="muted"] .orb {
+        filter: saturate(0.25) brightness(0.72);
+      }
+
+      /* ---------- Status ---------- */
+      .status {
+        min-height: 24px;
+        color: var(--muted);
+        font-size: 15px;
+        letter-spacing: 0.01em;
+        text-align: center;
+      }
+
+      .status[data-error="true"] { color: var(--danger); }
+
+      /* ---------- Controls ---------- */
+      .start {
+        appearance: none;
+        border: 0;
+        border-radius: 999px;
+        padding: 16px 44px;
+        font: inherit;
+        font-weight: 500;
+        font-size: 17px;
+        color: #14141a;
+        background: var(--fg);
+        cursor: pointer;
+        transition: transform 120ms ease, opacity 120ms ease;
+      }
+
+      .start:hover { transform: translateY(-1px); }
+      .start:active { transform: translateY(0); opacity: 0.85; }
+      .start[hidden] { display: none; }
+
+      .controls {
+        display: flex;
+        gap: 20px;
+      }
+
+      .controls[hidden] { display: none; }
+
+      .ctl {
+        appearance: none;
+        width: 60px;
+        height: 60px;
+        border: 0;
+        border-radius: 50%;
+        background: var(--ctl);
+        color: var(--fg);
+        display: grid;
+        place-items: center;
+        cursor: pointer;
+        transition: background 120ms ease, transform 120ms ease;
+      }
+
+      .ctl:hover { background: var(--ctl-hover); }
+      .ctl:active { transform: scale(0.94); }
+      .ctl[aria-pressed="true"] { background: var(--fg); color: #14141a; }
+      .ctl.end { background: var(--danger); color: #fff; }
+      .ctl.end:hover { background: #ff6157; }
+
+      .ctl svg { width: 24px; height: 24px; }
+
+      :focus-visible {
+        outline: 2px solid #8fa4ff;
+        outline-offset: 3px;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after {
+          animation: none !important;
+          transition: none !important;
+        }
+      }
+
+      @media (max-width: 420px) {
+        .stage { width: 240px; height: 240px; }
+        .orb, .ring { width: 150px; height: 150px; }
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="stage" id="stage" data-state="idle">
+      <div class="glow"></div>
+      <div class="ring"></div>
+      <div class="ring"></div>
+      <div class="orb"></div>
+    </div>
+
+    <p class="status" id="status">Tap start to talk</p>
+
+    <button class="start" id="startBtn">Start</button>
+
+    <div class="controls" id="controls" hidden>
+      <button class="ctl" id="muteBtn" aria-pressed="false" aria-label="Mute microphone">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+             stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z" />
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+          <line x1="12" y1="19" x2="12" y2="22" />
+        </svg>
+      </button>
+
+      <button class="ctl end" id="endBtn" aria-label="End call">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round">
+          <line x1="6" y1="6" x2="18" y2="18" />
+          <line x1="18" y1="6" x2="6" y2="18" />
+        </svg>
+      </button>
+    </div>
+
+    <script type="module">
+      import { Room, RoomEvent } from "https://cdn.skypack.dev/livekit-client";
+
+      /** Asks our server for a fresh, short-lived token — no secrets in the page. */
+      async function fetchCredentials() {
+        const res = await fetch("/token", { cache: "no-store" });
+        if (!res.ok) throw new Error(`token endpoint returned ${res.status}`);
+        const { url, token } = await res.json();
+        if (!url || !token) throw new Error("token endpoint returned no credentials");
+        return { url, token };
+      }
+
+      const stage = document.getElementById("stage");
+      const statusEl = document.getElementById("status");
+      const startBtn = document.getElementById("startBtn");
+      const controls = document.getElementById("controls");
+      const muteBtn = document.getElementById("muteBtn");
+      const endBtn = document.getElementById("endBtn");
+
+      let room = null;
+      let audioCtx = null;
+      let agentMeter = null; // reads the agent's voice
+      let micMeter = null; // reads yours
+      let raf = null;
+
+      const setStatus = (text, isError = false) => {
+        statusEl.textContent = text;
+        statusEl.dataset.error = String(isError);
+      };
+
+      /** Wraps a MediaStreamTrack in an analyser and reports 0→1 loudness. */
+      function createMeter(mediaStreamTrack) {
+        audioCtx ??= new AudioContext();
+        const source = audioCtx.createMediaStreamSource(
+          new MediaStream([mediaStreamTrack]),
+        );
+        const analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 512;
+        analyser.smoothingTimeConstant = 0.75;
+        source.connect(analyser);
+
+        const buf = new Uint8Array(analyser.frequencyBinCount);
+        return () => {
+          analyser.getByteFrequencyData(buf);
+          let sum = 0;
+          for (const v of buf) sum += v * v;
+          // RMS, then a gentle curve so quiet speech still moves the orb
+          const rms = Math.sqrt(sum / buf.length) / 255;
+          return Math.min(1, rms * 3.2);
+        };
+      }
+
+      function startRenderLoop() {
+        const tick = () => {
+          const agent = agentMeter ? agentMeter() : 0;
+          const mic = micMeter ? micMeter() : 0;
+
+          // The agent's voice drives the orb; your voice nudges it more subtly.
+          const level = Math.max(agent, mic * 0.45);
+          stage.style.setProperty("--level", level.toFixed(3));
+
+          if (stage.dataset.state !== "muted") {
+            stage.dataset.state =
+              agent > 0.06 ? "speaking" : mic > 0.08 ? "listening" : "live";
+          }
+
+          raf = requestAnimationFrame(tick);
+        };
+        tick();
+      }
+
+      async function start() {
+        startBtn.hidden = true;
+        stage.dataset.state = "connecting";
+        setStatus("Connecting…");
+
+        let url, token;
+        try {
+          ({ url, token } = await fetchCredentials());
+        } catch (err) {
+          console.error(err);
+          teardown(`Could not get a token: ${err.message}`, true);
+          return;
+        }
+
+        room = new Room();
+
+        // Registered before connect so the agent's greeting is never missed.
+        room.on(RoomEvent.TrackSubscribed, (track) => {
+          if (track.kind !== "audio") return;
+          document.body.appendChild(track.attach()); // actually plays it
+          agentMeter = createMeter(track.mediaStreamTrack);
+        });
+
+        room.on(RoomEvent.LocalTrackPublished, (pub) => {
+          if (pub.kind === "audio" && pub.track) {
+            micMeter = createMeter(pub.track.mediaStreamTrack);
+          }
+        });
+
+        room.on(RoomEvent.Disconnected, () => teardown("Call ended"));
+
+        try {
+          await room.connect(url, token);
+          await room.startAudio(); // unlock autoplay while still in the click
+          await room.localParticipant.setMicrophoneEnabled(true);
+        } catch (err) {
+          console.error(err);
+          teardown(`Could not connect: ${err.message}`, true);
+          return;
+        }
+
+        controls.hidden = false;
+        stage.dataset.state = "live";
+        setStatus("Listening…");
+        startRenderLoop();
+      }
+
+      function teardown(message, isError = false) {
+        if (raf) cancelAnimationFrame(raf);
+        raf = null;
+        agentMeter = micMeter = null;
+        audioCtx?.close();
+        audioCtx = null;
+        room?.disconnect();
+        room = null;
+
+        document.querySelectorAll("audio").forEach((el) => el.remove());
+        controls.hidden = true;
+        startBtn.hidden = false;
+        startBtn.textContent = "Start again";
+        muteBtn.setAttribute("aria-pressed", "false");
+        stage.dataset.state = "idle";
+        stage.style.setProperty("--level", 0);
+        setStatus(message, isError);
+      }
+
+      startBtn.addEventListener("click", start);
+
+      muteBtn.addEventListener("click", async () => {
+        if (!room) return;
+        const nowMuted = muteBtn.getAttribute("aria-pressed") !== "true";
+        await room.localParticipant.setMicrophoneEnabled(!nowMuted);
+        muteBtn.setAttribute("aria-pressed", String(nowMuted));
+        muteBtn.setAttribute(
+          "aria-label",
+          nowMuted ? "Unmute microphone" : "Mute microphone",
+        );
+        stage.dataset.state = nowMuted ? "muted" : "live";
+        setStatus(nowMuted ? "Microphone off" : "Listening…");
+      });
+
+      endBtn.addEventListener("click", () => teardown("Call ended"));
+    </script>
+  </body>
+</html>

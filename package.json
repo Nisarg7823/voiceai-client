@@ -1,0 +1,13 @@
+{
+  "dependencies": {
+    "dotenv": "^18.0.4",
+    "livekit-client": "^2.22.3",
+    "livekit-server-sdk": "^2.19.1"
+  },
+  "name": "voiceai-client",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node token-server.mjs"
+  }
+}
